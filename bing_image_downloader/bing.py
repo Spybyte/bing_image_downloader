@@ -6,6 +6,8 @@ import urllib.request
 import urllib
 import imghdr
 import re
+import cv2
+import numpy as np
 
 '''
 Python api to download image form Bing.
@@ -30,15 +32,43 @@ class Bing:
         self.headers.update(headers)
 
         self.page_counter = 0
+        self.known_hashes = []
+        self.known_urls = []
+
+    # Calculate image hash: https://www.pyimagesearch.com/2020/04/20/detect-and-remove-duplicate-images-from-a-dataset-for-deep-learning/
+    def dhash(self, image, hashSize=8):
+        # convert image from request to an cv2 compatible image
+        cv2_image = np.asarray(bytearray(image), dtype="uint8")
+        cv2_image = cv2.imdecode(cv2_image, cv2.IMREAD_COLOR)
+
+        # convert the image to grayscale and resize the grayscale image,
+        # adding a single column (width) so we can compute the horizontal
+        # gradient
+        gray = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2GRAY)
+        resized = cv2.resize(gray, (hashSize + 1, hashSize))
+        # compute the (relative) horizontal gradient between adjacent
+        # column pixels
+        diff = resized[:, 1:] > resized[:, :-1]
+        # convert the difference image to a hash and return it
+        return sum([2 ** i for (i, v) in enumerate(diff.flatten()) if v])
 
     def save_image(self, link, file_path):
         request = urllib.request.Request(link, None, self.headers)
         image = urllib.request.urlopen(request, timeout=self.timeout).read()
+        hash = self.dhash(image)
+
+        if hash in self.known_hashes:
+            print(f'[Warn] {self.query}: Image already downloaded, ignoring it {link}\n')
+            raise
+        self.known_hashes.append(hash)
+
         if not imghdr.what(None, image):
             print(f'[Error] {self.query}: Invalid image, not saving {link}\n')
             raise
+
         with open(file_path, 'wb') as f:
             f.write(image)
+
 
     def download_image(self, link):
         self.download_count += 1
@@ -53,10 +83,14 @@ class Bing:
 
             # Download the image
             print(f"[%] {self.query}: Downloading Image #{self.download_count} from {link}")
-
-            self.save_image(link, "{}/{}/{}/".format(os.getcwd(), self.output_dir, self.query) + "Image_{}.{}".format(
+            if link in self.known_urls:
+                print(f'[%] {self.query}: Image already downloaded, ignoring it {link}\n')
+                self.download_count -= 1
+            else:
+                self.known_urls.append(link)
+                self.save_image(link, "{}/{}/{}/".format(os.getcwd(), self.output_dir, self.query) + "Image_{}.{}".format(
                 str(self.download_count), file_type))
-            print(f"[%] {self.query}: File Downloaded !\n")
+                print(f"[%] {self.query}: File Downloaded !\n")
         except Exception as e:
             self.download_count -= 1
             print(f"[!] {self.query}: Issue getting: {link}\n[!] {self.query}: Error:: {e}")
